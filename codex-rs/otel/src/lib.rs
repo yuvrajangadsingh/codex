@@ -15,6 +15,8 @@ use crate::metrics::validation::validate_tag_value;
 use crate::otel_provider::OtelProvider;
 use codex_protocol::ThreadId;
 use serde::Serialize;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use strum_macros::Display;
 use tracing::Span;
@@ -42,7 +44,7 @@ pub struct OtelEventMetadata {
 #[derive(Debug, Clone)]
 pub struct OtelManager {
     pub(crate) metadata: OtelEventMetadata,
-    pub(crate) session_span: Span,
+    pub(crate) session_span: Arc<Mutex<Option<Span>>>,
     pub(crate) metrics: Option<MetricsClient>,
     pub(crate) metrics_use_metadata_tags: bool,
 }

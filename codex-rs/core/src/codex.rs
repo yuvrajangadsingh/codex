@@ -2309,6 +2309,8 @@ mod handlers {
             sess.send_event_raw(event).await;
         }
 
+        sess.services.otel_manager.end_session();
+
         let event = Event {
             id: sub_id,
             msg: EventMsg::ShutdownComplete,

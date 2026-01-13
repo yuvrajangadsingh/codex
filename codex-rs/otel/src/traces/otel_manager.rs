@@ -19,6 +19,8 @@ use reqwest::Response;
 use std::borrow::Cow;
 use std::fmt::Display;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::time::error::Elapsed;
@@ -48,7 +50,6 @@ impl OtelManager {
         if let Some(context) = traceparent_context_from_env() {
             let _ = session_span.set_parent(context);
         }
-
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
@@ -61,14 +62,24 @@ impl OtelManager {
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
             },
-            session_span,
+            session_span: Arc::new(Mutex::new(Some(session_span))),
             metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
         }
     }
 
-    pub fn current_span(&self) -> &Span {
-        &self.session_span
+    pub fn apply_session_parent(&self, span: &Span) {
+        if let Ok(guard) = self.session_span.lock()
+            && let Some(parent) = guard.as_ref()
+        {
+            let _ = span.set_parent(parent.context());
+        }
+    }
+
+    pub fn end_session(&self) {
+        if let Ok(mut guard) = self.session_span.lock() {
+            guard.take();
+        }
     }
 
     pub fn record_responses(&self, handle_responses_span: &Span, event: &ResponseEvent) {
