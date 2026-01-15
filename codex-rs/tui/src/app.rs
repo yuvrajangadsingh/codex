@@ -759,6 +759,8 @@ impl App {
                     otel_manager: self.otel_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
+                // Update file search directory to match the current config's cwd.
+                self.file_search.update_search_dir(self.config.cwd.clone());
                 if let Some(summary) = summary {
                     let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
                     if let Some(command) = summary.resume_command {
@@ -798,11 +800,14 @@ impl App {
                                     tui,
                                     self.config.clone(),
                                 );
+                                let resumed_cwd = resumed.session_configured.cwd.clone();
                                 self.chat_widget = ChatWidget::new_from_existing(
                                     init,
                                     resumed.thread,
                                     resumed.session_configured,
                                 );
+                                // Update file search directory to match the resumed session's cwd.
+                                self.file_search.update_search_dir(resumed_cwd);
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
                                         vec![summary.usage_line.clone().into()];
@@ -847,11 +852,14 @@ impl App {
                                 tui,
                                 self.config.clone(),
                             );
+                            let forked_cwd = forked.session_configured.cwd.clone();
                             self.chat_widget = ChatWidget::new_from_existing(
                                 init,
                                 forked.thread,
                                 forked.session_configured,
                             );
+                            // Update file search directory to match the forked session's cwd.
+                            self.file_search.update_search_dir(forked_cwd);
                             if let Some(summary) = summary {
                                 let mut lines: Vec<Line<'static>> =
                                     vec![summary.usage_line.clone().into()];

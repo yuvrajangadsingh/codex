@@ -45,7 +45,6 @@ pub(crate) struct FileSearchManager {
     /// Unified state guarded by one mutex.
     state: Arc<Mutex<SearchState>>,
 
-    search_dir: PathBuf,
     app_tx: AppEventSender,
 }
 
@@ -58,6 +57,10 @@ struct SearchState {
 
     /// If there is an active search, this will be the query being searched.
     active_search: Option<ActiveSearch>,
+
+    /// Directory to search in. Stored in state so debounce threads read the
+    /// current value when they fire, not the value when they were spawned.
+    search_dir: PathBuf,
 }
 
 struct ActiveSearch {
@@ -72,10 +75,28 @@ impl FileSearchManager {
                 latest_query: String::new(),
                 is_search_scheduled: false,
                 active_search: None,
+                search_dir,
             })),
-            search_dir,
             app_tx: tx,
         }
+    }
+
+    /// Updates the directory used for file searches.
+    /// This should be called when the session's CWD changes (e.g., on new session, resume, or fork).
+    /// Cancels any in-flight search and clears state to prevent stale results from the old directory.
+    pub fn update_search_dir(&mut self, new_dir: PathBuf) {
+        // Cancel any in-flight search and reset state so old results can't pollute the new session.
+        #[expect(clippy::unwrap_used)]
+        let mut st = self.state.lock().unwrap();
+        st.search_dir = new_dir;
+        if let Some(active_search) = &st.active_search {
+            active_search
+                .cancellation_token
+                .store(true, Ordering::Relaxed);
+        }
+        st.active_search = None;
+        st.latest_query.clear();
+        st.is_search_scheduled = false;
     }
 
     /// Call whenever the user edits the `@` token.
@@ -115,7 +136,6 @@ impl FileSearchManager {
         // dropping the lock. This means we are the only thread that can spawn a
         // debounce timer.
         let state = self.state.clone();
-        let search_dir = self.search_dir.clone();
         let tx_clone = self.app_tx.clone();
         thread::spawn(move || {
             // Always do a minimum debounce, but then poll until the
@@ -130,19 +150,29 @@ impl FileSearchManager {
             }
 
             // The debounce timer has expired, so start a search using the
-            // latest query.
+            // latest query and current search_dir (read from state to get the
+            // most recent value, not a stale captured one).
             let cancellation_token = Arc::new(AtomicBool::new(false));
             let token = cancellation_token.clone();
-            let query = {
+            let (query, search_dir) = {
                 #[expect(clippy::unwrap_used)]
                 let mut st = state.lock().unwrap();
                 let query = st.latest_query.clone();
+
+                // If query is empty (e.g., session changed and cleared state while we
+                // were sleeping), skip the search to avoid expensive match-all traversal.
+                if query.is_empty() {
+                    st.is_search_scheduled = false;
+                    return;
+                }
+
+                let search_dir = st.search_dir.clone();
                 st.is_search_scheduled = false;
                 st.active_search = Some(ActiveSearch {
                     query: query.clone(),
                     cancellation_token: token,
                 });
-                query
+                (query, search_dir)
             };
 
             FileSearchManager::spawn_file_search(
