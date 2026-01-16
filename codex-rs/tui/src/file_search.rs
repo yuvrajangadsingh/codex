@@ -61,6 +61,10 @@ struct SearchState {
     /// Directory to search in. Stored in state so debounce threads read the
     /// current value when they fire, not the value when they were spawned.
     search_dir: PathBuf,
+
+    /// Generation counter incremented on session changes. Debounce threads
+    /// capture this when spawned and abort if it changes before they fire.
+    generation: u64,
 }
 
 struct ActiveSearch {
@@ -76,6 +80,7 @@ impl FileSearchManager {
                 is_search_scheduled: false,
                 active_search: None,
                 search_dir,
+                generation: 0,
             })),
             app_tx: tx,
         }
@@ -89,6 +94,8 @@ impl FileSearchManager {
         #[expect(clippy::unwrap_used)]
         let mut st = self.state.lock().unwrap();
         st.search_dir = new_dir;
+        // Increment generation to invalidate any pending debounce threads from the old session.
+        st.generation = st.generation.wrapping_add(1);
         if let Some(active_search) = &st.active_search {
             active_search
                 .cancellation_token
@@ -101,7 +108,7 @@ impl FileSearchManager {
 
     /// Call whenever the user edits the `@` token.
     pub fn on_user_query(&self, query: String) {
-        {
+        let spawned_generation = {
             #[expect(clippy::unwrap_used)]
             let mut st = self.state.lock().unwrap();
             if query == st.latest_query {
@@ -130,7 +137,10 @@ impl FileSearchManager {
             } else {
                 return;
             }
-        }
+
+            // Capture generation to detect session changes while debounce is sleeping.
+            st.generation
+        };
 
         // If we are here, we set `st.is_search_scheduled = true` before
         // dropping the lock. This means we are the only thread that can spawn a
@@ -157,6 +167,13 @@ impl FileSearchManager {
             let (query, search_dir) = {
                 #[expect(clippy::unwrap_used)]
                 let mut st = state.lock().unwrap();
+
+                // If generation changed, a session switch happened while we were sleeping.
+                // Abort silently - a new debounce thread for the new session may have been spawned.
+                if st.generation != spawned_generation {
+                    return;
+                }
+
                 let query = st.latest_query.clone();
 
                 // If query is empty (e.g., session changed and cleared state while we
